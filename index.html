@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<body>
+<canvas id="game" width="400" height="460" style="background:dimgray"></canvas>
+
+<script>
+let c = document.getElementById("game");
+let ctx = c.getContext("2d");
+let box = 20;
+let grid = 20;
+
+// ==== NN (8 → 12 → 3) ====
+let w1 = Array.from({length:8}, () => Array.from({length:12}, () => Math.random()-0.5));
+let w2 = Array.from({length:12}, () => Array.from({length:3}, () => Math.random()-0.5));
+
+let lr = 0.001;
+let gamma = 0.9;
+
+// ==== MEMORY ====
+let memory = [];
+let maxMemory = 2000;
+
+// ==== EXPLORATION ====
+let epsilon = 1.0;
+let epsilonDecay = 0.995;
+let minEpsilon = 0.05;
+
+function relu(x){ return x > 0 ? x : 0; }
+
+function forward(inputs){
+  let h = [];
+  for(let i=0;i<12;i++){
+    let sum = 0;
+    for(let j=0;j<8;j++) sum += inputs[j]*w1[j][i];
+    h[i] = relu(sum);
+  }
+
+  let out = [];
+  for(let i=0;i<3;i++){
+    let sum = 0;
+    for(let j=0;j<12;j++) sum += h[j]*w2[j][i];
+    out[i] = sum;
+  }
+
+  return {h, out};
+}
+
+// ==== TRAIN (Q-learning style) ====
+function train(batchSize=20){
+  for(let b=0;b<batchSize;b++){
+    let exp = memory[Math.floor(Math.random()*memory.length)];
+    if(!exp) continue;
+
+    let {state, action, reward, nextState, done} = exp;
+
+    let {h, out} = forward(state);
+    let target = out.slice();
+
+    if(done){
+      target[action] = reward;
+    } else {
+      let nextQ = forward(nextState).out;
+      target[action] = reward + gamma * Math.max(...nextQ);
+    }
+
+    // update w2 only (simple)
+    for(let i=0;i<12;i++){
+      let error = target[action] - out[action];
+      w2[i][action] += lr * error * h[i];
+    }
+  }
+}
+
+// ==== GAME ====
+let snake, food, dir;
+let episode = 0;
+let steps = 0;
+
+function reset(){
+  snake = [{x:200,y:200}];
+  food = {
+    x: Math.floor(Math.random()*grid)*box,
+    y: Math.floor(Math.random()*grid)*box
+  };
+  dir = 0;
+  steps = 0;
+  episode++;
+
+  epsilon = Math.max(minEpsilon, epsilon * epsilonDecay);
+}
+reset();
+
+function collision(x,y){
+  if(x<0||y<0||x>=400||y>=400) return 1;
+  for(let s of snake){
+    if(s.x===x && s.y===y) return 1;
+  }
+  return 0;
+}
+
+// ==== VISION (8 directions) ====
+function getState(){
+  let head = snake[0];
+
+  let dirs = [
+    [1,0],[-1,0],[0,1],[0,-1],
+    [1,1],[-1,-1],[1,-1],[-1,1]
+  ];
+
+  let state = [];
+
+  for(let d of dirs){
+    let dx = d[0], dy = d[1];
+    let x = head.x, y = head.y;
+    let dist = 0;
+
+    while(true){
+      x += dx*box;
+      y += dy*box;
+      dist++;
+
+      if(x===food.x && y===food.y){
+        state.push(1);
+        break;
+      }
+
+      if(collision(x,y)){
+        state.push(-1/dist);
+        break;
+      }
+    }
+  }
+console.log(state)
+  return state;
+}
+
+// ==== LOOP ====
+function draw(){
+  ctx.fillStyle="black";
+  ctx.fillRect(0,0,400,460);
+
+  let state = getState();
+  let {out} = forward(state);
+
+  // epsilon-greedy
+  let action;
+  if(Math.random() < epsilon){
+    action = Math.floor(Math.random()*3);
+  } else {
+    action = out.indexOf(Math.max(...out));
+  }
+
+  // apply action
+  if(action===1) dir = (dir+1)%4;
+  if(action===2) dir = (dir+3)%4;
+
+  let head = {...snake[0]};
+  if(dir===0) head.x+=box;
+  if(dir===1) head.y+=box;
+  if(dir===2) head.x-=box;
+  if(dir===3) head.y-=box;
+
+  let reward = -0.02;
+  let done = false;
+
+  // death
+  if(collision(head.x, head.y)){
+    reward = -3;
+    done = true;
+  }
+
+  // eat
+  if(head.x===food.x && head.y===food.y){
+    reward = 3;
+    food = {
+      x: Math.floor(Math.random()*grid)*box,
+      y: Math.floor(Math.random()*grid)*box
+    };
+  } else {
+    snake.pop();
+  }
+
+  snake.unshift(head);
+
+  let nextState = getState();
+
+  // store memory
+  memory.push({state, action, reward, nextState, done});
+  console.log({state, action, reward, nextState, done})
+  if(memory.length > maxMemory) memory.shift();
+
+  train();
+
+  if(done || steps > 300){
+    reset();
+    return;
+  }
+
+  steps++;
+
+  // ==== DRAW ====
+  ctx.fillStyle="orange";
+  for(let s of snake){
+    ctx.fillRect(s.x, s.y, box, box);
+  }
+
+  ctx.fillStyle="red";
+  ctx.fillRect(food.x, food.y, box, box);
+
+  ctx.fillStyle="white";
+  ctx.font="14px Arial";
+  ctx.fillText("Episode: " + episode, 10, 420);
+  ctx.fillText("Steps: " + steps, 120, 420);
+  ctx.fillText("Epsilon: " + epsilon.toFixed(2), 220, 420);
+  ctx.fillText("Memory: " + memory.length, 10, 440);
+  console.log(snake)
+}
+
+setInterval(draw, 40);
+</script>
+</body>
+</html>
